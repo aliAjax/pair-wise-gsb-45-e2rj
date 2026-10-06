@@ -1,0 +1,11 @@
+{
+  "projectId": "pair-wise-gsb-45",
+  "projectName": "pair-wise-gsb-45",
+  "category": "地狱 Python 模块化项目",
+  "businessDomain": "港口调度",
+  "projectForm": "完整项目",
+  "codeScope": "backend, frontend",
+  "languages": ["Python", "HTML", "CSS", "JavaScript"],
+  "summary": "港口泊位与航道调度服务，覆盖靠泊可行性、吃水安全、时间窗冲突和审计状态机。",
+  "containerized": false
+}
