@@ -15,8 +15,16 @@
 <body>
 <main>
   <h1>港口泊位与航道调度</h1>
-  <p>最小演示页。完整业务流程通过README中的JSON接口调用。</p>
-  <div class="row"><button id="load">加载记录</button><button id="stats">查看状态统计</button></div>
+  <p>最小演示页。潮位报文、重算运行、冲突草稿与复核队列通过README中的JSON接口操作。</p>
+  <div class="row">
+    <button id="load">加载记录</button>
+    <button id="stats">状态统计</button>
+    <button id="tide">潮位报文</button>
+    <button id="runs">重算运行</button>
+    <button id="drafts">冲突草稿</button>
+    <button id="reviews">复核队列</button>
+    <button id="bookings">资源占用</button>
+  </div>
   <pre id="output">点击上方按钮读取服务状态。</pre>
 </main>
 <script>
@@ -28,6 +36,11 @@ async function show(path) {
 }
 document.getElementById("load").onclick = () => show("/api/records?limit=20");
 document.getElementById("stats").onclick = () => show("/api/stats");
+document.getElementById("tide").onclick = () => show("/api/tide-reports?limit=20");
+document.getElementById("runs").onclick = () => show("/api/recompute-runs?limit=20");
+document.getElementById("drafts").onclick = () => show("/api/conflict-drafts?limit=20");
+document.getElementById("reviews").onclick = () => show("/api/reviews?limit=20");
+document.getElementById("bookings").onclick = () => show("/api/resource-bookings?status=held&limit=50");
 </script>
 </body>
 </html>

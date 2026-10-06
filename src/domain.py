@@ -23,6 +23,18 @@ class Conflict(DomainError):
     code = "conflict"
 
 
+class ResourceBusy(Conflict):
+    code = "resource_busy"
+
+
+class VersionConflict(Conflict):
+    code = "version_conflict"
+
+
+class StaleMessage(Conflict):
+    code = "stale_message"
+
+
 class PermissionDenied(DomainError):
     status = 403
     code = "permission_denied"

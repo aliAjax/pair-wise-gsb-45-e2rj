@@ -12,6 +12,11 @@ from .domain import Actor, DomainError, PermissionDenied, ValidationError
 RECORD_RE = re.compile(r"^/api/records/(\d+)$")
 ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
+DECISIONS_RE = re.compile(r"^/api/records/(\d+)/decisions$")
+RUN_RE = re.compile(r"^/api/recompute-runs/(\d+)$")
+RUN_RETRY_RE = re.compile(r"^/api/recompute-runs/(\d+)/retry$")
+DRAFT_RE = re.compile(r"^/api/conflict-drafts/(\d+)$")
+REVIEW_RE = re.compile(r"^/api/reviews/(\d+)$")
 
 
 def make_handler(service: Any, static_dir: Path):
@@ -64,6 +69,7 @@ def make_handler(service: Any, static_dir: Path):
         def do_GET(self) -> None:
             try:
                 parsed = urlparse(self.path)
+                query = parse_qs(parsed.query)
                 if parsed.path == "/health":
                     self._send(200, {"status": "ok", "service": "port-berth", "database": service.repository.health()})
                     return
@@ -72,20 +78,53 @@ def make_handler(service: Any, static_dir: Path):
                     self._send(200, page, "text/html; charset=utf-8")
                     return
                 if parsed.path == "/api/records":
-                    query = parse_qs(parsed.query)
-                    records = service.list_records(self._actor(), state=query.get("state", [None])[0], limit=int(query.get("limit", ["100"])[0]))
+                    records = service.list_records(self._actor(),
+                                                   state=query.get("state", [None])[0],
+                                                   limit=int(query.get("limit", ["100"])[0]))
                     self._send(200, {"items": records})
                     return
-                match = RECORD_RE.match(parsed.path)
+                match = DECISIONS_RE.match(parsed.path)
                 if match:
-                    self._send(200, service.get_record(self._actor(), int(match.group(1))))
+                    self._send(200, {"items": service.list_decisions(self._actor(), int(match.group(1)))})
                     return
                 match = AUDIT_RE.match(parsed.path)
                 if match:
                     self._send(200, {"items": service.timeline(self._actor(), int(match.group(1)))})
                     return
+                match = RECORD_RE.match(parsed.path)
+                if match:
+                    self._send(200, service.get_record(self._actor(), int(match.group(1))))
+                    return
                 if parsed.path == "/api/stats":
                     self._send(200, service.stats(self._actor()))
+                    return
+                if parsed.path == "/api/tide-reports":
+                    self._send(200, {"items": service.list_tide_reports(
+                        self._actor(), series_id=query.get("series_id", [None])[0],
+                        limit=int(query.get("limit", ["100"])[0]))})
+                    return
+                if parsed.path == "/api/recompute-runs":
+                    self._send(200, {"items": service.list_recompute_runs(
+                        self._actor(), limit=int(query.get("limit", ["100"])[0]))})
+                    return
+                match = RUN_RE.match(parsed.path)
+                if match:
+                    self._send(200, service.get_recompute_run(self._actor(), int(match.group(1))))
+                    return
+                if parsed.path == "/api/conflict-drafts":
+                    self._send(200, {"items": service.list_conflict_drafts(
+                        self._actor(), status=query.get("status", [None])[0],
+                        limit=int(query.get("limit", ["100"])[0]))})
+                    return
+                if parsed.path == "/api/reviews":
+                    self._send(200, {"items": service.list_reviews(
+                        self._actor(), status=query.get("status", [None])[0],
+                        limit=int(query.get("limit", ["100"])[0]))})
+                    return
+                if parsed.path == "/api/resource-bookings":
+                    self._send(200, {"items": service.list_bookings(
+                        self._actor(), status=query.get("status", [None])[0],
+                        limit=int(query.get("limit", ["200"])[0]))})
                     return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
             except Exception as exc:
@@ -99,12 +138,31 @@ def make_handler(service: Any, static_dir: Path):
                     record = service.create(self._actor(), body.get("reference", ""), body.get("data", {}))
                     self._send(201, record)
                     return
+                if parsed.path == "/api/tide-reports":
+                    self._send(201, service.ingest_tide_report(self._actor(), body.get("data", body)))
+                    return
+                match = RUN_RETRY_RE.match(parsed.path)
+                if match:
+                    self._send(200, service.retry_recompute(self._actor(), int(match.group(1))))
+                    return
+                match = DRAFT_RE.match(parsed.path)
+                if match:
+                    resolution = body.get("resolution", "")
+                    self._send(200, service.resolve_conflict_draft(
+                        self._actor(), int(match.group(1)), str(resolution)))
+                    return
+                match = REVIEW_RE.match(parsed.path)
+                if match:
+                    self._send(200, service.resolve_review(
+                        self._actor(), int(match.group(1)), str(body.get("resolution", ""))))
+                    return
                 match = ACTION_RE.match(parsed.path)
                 if match:
                     version = body.get("expected_version")
                     if not isinstance(version, int):
                         raise ValidationError("expected_version必须是整数")
-                    record = service.act(self._actor(), int(match.group(1)), version, match.group(2), body.get("data", {}))
+                    record = service.act(self._actor(), int(match.group(1)), version,
+                                         match.group(2), body.get("data", {}))
                     self._send(200, record)
                     return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
