@@ -3,31 +3,112 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>港口泊位与航道调度</title>
+  <title>港口泊位与航道调度 · 潮位复核</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #17212b; }
-    main { max-width: 960px; margin: auto; }
-    button { padding: .55rem .9rem; cursor: pointer; }
-    pre { background: #f4f6f8; padding: 1rem; overflow: auto; border-radius: 8px; }
-    .row { display: flex; gap: 1rem; align-items: center; }
+    main { max-width: 1080px; margin: auto; }
+    h1 { margin-bottom: .25rem; }
+    .hint { color: #5b6b7a; margin-top: 0; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin: 1.25rem 0; }
+    .card { border: 1px solid #d9e0e7; border-radius: 10px; padding: 1rem 1.1rem; background: #fff; }
+    .card h2 { font-size: 1rem; margin: 0 0 .75rem; }
+    label { display: block; font-size: .8rem; color: #465463; margin: .45rem 0 .15rem; }
+    input, select { width: 100%; box-sizing: border-box; padding: .42rem .5rem; border: 1px solid #c4cdd6; border-radius: 6px; }
+    button { padding: .5rem .85rem; cursor: pointer; border: 0; border-radius: 6px; background: #1a6fe0; color: #fff; margin-top: .7rem; }
+    button.ghost { background: #eef2f6; color: #17212b; }
+    .steps { display: flex; flex-wrap: wrap; gap: .5rem; margin: .5rem 0 1rem; }
+    pre { background: #0f1b26; color: #dbe7f0; padding: 1rem; overflow: auto; border-radius: 8px; min-height: 220px; font-size: .82rem; }
+    .pill { display: inline-block; padding: .12rem .55rem; border-radius: 999px; font-size: .78rem; }
+    .ok { background: #e2f6e9; color: #146c33; }
+    .bad { background: #fde8e8; color: #a5271f; }
   </style>
 </head>
 <body>
 <main>
-  <h1>港口泊位与航道调度</h1>
-  <p>最小演示页。完整业务流程通过README中的JSON接口调用。</p>
-  <div class="row"><button id="load">加载记录</button><button id="stats">查看状态统计</button></div>
-  <pre id="output">点击上方按钮读取服务状态。</pre>
+  <h1>港口泊位与航道调度 · 潮位可恢复复核</h1>
+  <p class="hint">同一测次报文号只入账一次；迟到/订正报文使未靠泊计划原判定失效并重算；已靠泊计划冻结当时依据待复核。</p>
+
+  <div class="card">
+    <div class="steps">
+      <button class="ghost" id="loadPlans">① 刷新测次/计划</button>
+      <button class="ghost" id="loadJobs">② 查看复核作业</button>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>录入测次（录入水深）</h2>
+      <label>测次名</label><input id="sName" value="CH-N1">
+      <label>录入水深 sounding_m</label><input id="sDepth" type="number" step="0.1" value="10.0">
+      <label>观测小时（0-23）</label><input id="sHour" type="number" value="22">
+      <button id="createSeries">创建测次</button>
+    </div>
+
+    <div class="card">
+      <h2>编制靠泊计划</h2>
+      <label>测次 ID</label><input id="pSeries" type="number" value="1">
+      <label>船名</label><input id="pName" value="MV-HAIYUN">
+      <label>吃水 draft_m</label><input id="pDraft" type="number" step="0.1" value="9.4">
+      <label>航道通行证</label><input id="pPass" value="PASS-1">
+      <label>引航员班次</label><input id="pShift" value="NIGHT-1">
+      <button id="createPlan">创建计划</button>
+    </div>
+
+    <div class="card">
+      <h2>调度确认放行</h2>
+      <label>计划 ID</label><input id="rPlan" type="number" value="1">
+      <label>expected_version</label><input id="rVersion" type="number" value="1">
+      <button id="release">确认放行</button>
+      <button class="ghost" id="berth">开始靠泊</button>
+      <button class="ghost" id="depart">离泊（释放资源）</button>
+    </div>
+
+    <div class="card">
+      <h2>潮位观测报文（迟到/订正）</h2>
+      <label>测次 ID</label><input id="tSeries" type="number" value="1">
+      <label>报文号 report_no</label><input id="tNo" value="T-001">
+      <label>潮位 tide_m（可负）</label><input id="tTide" type="number" step="0.1" value="-0.2">
+      <label>观测小时</label><input id="tHour" type="number" value="23">
+      <label><input type="checkbox" id="tCorrected" style="width:auto"> 订正报文</label>
+      <button id="ingest">入账并触发重算</button>
+    </div>
+  </div>
+
+  <pre id="output">操作结果将显示在这里。</pre>
 </main>
 <script>
-const headers = {"X-User-Id":"demo-admin","X-Role":"admin","X-Org":"demo"};
-async function show(path) {
-  const response = await fetch(path, {headers});
+const out = document.getElementById("output");
+function show(data) { out.textContent = JSON.stringify(data, null, 2); }
+async function call(method, path, body, role) {
+  const headers = {"Content-Type": "application/json",
+    "X-User-Id": role === "obs" ? "obs-demo" : "dispatcher-demo",
+    "X-Role": role === "obs" ? "tide_observer" : "port_controller"};
+  const response = await fetch(path, {method, headers, body: body ? JSON.stringify(body) : undefined});
   const data = await response.json();
-  document.getElementById("output").textContent = JSON.stringify(data, null, 2);
+  if (!response.ok) throw Object.assign(new Error(data.message || "请求失败"), {data});
+  return data;
 }
-document.getElementById("load").onclick = () => show("/api/records?limit=20");
-document.getElementById("stats").onclick = () => show("/api/stats");
+async function run(label, fn) {
+  try { show({[label]: await fn()}); }
+  catch (err) { show({error: label, message: err.message, detail: err.data}); }
+}
+const val = id => document.getElementById(id).value;
+document.getElementById("createSeries").onclick = () => run("series", () =>
+  call("POST", "/api/series", {data: {name: val("sName"), sounding_m: +val("sDepth"), observed_hour: +val("sHour")}}));
+document.getElementById("createPlan").onclick = () => run("plan", () =>
+  call("POST", `/api/series/${val("pSeries")}/plans`,
+    {data: {name: val("pName"), draft_m: +val("pDraft"), channel_pass: val("pPass"), pilot_shift: val("pShift")}}));
+document.getElementById("release").onclick = () => run("release", () =>
+  call("POST", "/api/plans/release", {plan_id: +val("rPlan"), expected_version: +val("rVersion"), data: {}}));
+document.getElementById("berth").onclick = () => run("berth", () => call("POST", `/api/plans/${val("rPlan")}/berth`, {}));
+document.getElementById("depart").onclick = () => run("depart", () => call("POST", `/api/plans/${val("rPlan")}/depart`, {}));
+document.getElementById("ingest").onclick = () => run("ingest", () =>
+  call("POST", `/api/series/${val("tSeries")}/tide-reports`,
+    {data: {report_no: val("tNo"), tide_m: +val("tTide"), observed_hour: +val("tHour"),
+            corrected: document.getElementById("tCorrected").checked}}, "obs"));
+document.getElementById("loadPlans").onclick = () => run("plans", async () =>
+  ({series: await call("GET", "/api/series"), plans: await call("GET", "/api/series/1/plans")}));
+document.getElementById("loadJobs").onclick = () => run("jobs", () => call("GET", "/api/jobs"));
 </script>
 </body>
 </html>

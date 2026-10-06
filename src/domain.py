@@ -28,6 +28,19 @@ class PermissionDenied(DomainError):
     code = "permission_denied"
 
 
+class ResourceBusy(Conflict):
+    """航道通行证或引航员班次已被其他计划占用。"""
+
+    code = "resource_busy"
+
+
+class ReleaseRejected(DomainError):
+    """按当前水文依据判定不通过，不予放行。"""
+
+    status = 422
+    code = "release_rejected"
+
+
 @dataclass(frozen=True)
 class Actor:
     user_id: str

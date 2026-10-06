@@ -13,8 +13,15 @@ RECORD_RE = re.compile(r"^/api/records/(\d+)$")
 ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
 
+SERIES_ITEM_RE = re.compile(r"^/api/series/(\d+)$")
+SERIES_REPORTS_RE = re.compile(r"^/api/series/(\d+)/tide-reports$")
+SERIES_PLANS_RE = re.compile(r"^/api/series/(\d+)/plans$")
+PLAN_RE = re.compile(r"^/api/plans/(\d+)$")
+PLAN_SUB_RE = re.compile(r"^/api/plans/(\d+)/(decisions|reservations|drafts|events)$")
+JOB_RE = re.compile(r"^/api/jobs/(\d+)$")
 
-def make_handler(service: Any, static_dir: Path):
+
+def make_handler(service: Any, static_dir: Path, hydro: Any = None):
     class Handler(BaseHTTPRequestHandler):
         server_version = "port-berth/1.0"
 
@@ -57,7 +64,11 @@ def make_handler(service: Any, static_dir: Path):
 
         def _handle_error(self, exc: Exception) -> None:
             if isinstance(exc, DomainError):
-                self._send(exc.status, {"error": exc.code, "message": str(exc)})
+                payload = {"error": exc.code, "message": str(exc)}
+                draft = getattr(exc, "draft", None)
+                if draft is not None:
+                    payload["draft"] = draft
+                self._send(exc.status, payload)
             else:
                 self._send(500, {"error": "internal_error", "message": "服务内部错误"})
 
@@ -87,6 +98,46 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/stats":
                     self._send(200, service.stats(self._actor()))
                     return
+                if hydro is not None:
+                    if parsed.path == "/api/series":
+                        self._send(200, {"items": hydro.list_series()})
+                        return
+                    if parsed.path == "/api/jobs":
+                        self._send(200, {"items": hydro.list_jobs()})
+                        return
+                    match = SERIES_ITEM_RE.match(parsed.path)
+                    if match:
+                        series_id = int(match.group(1))
+                        reports = hydro.repository.list_reports(series_id)
+                        self._send(200, {"series": hydro.repository.get_series(series_id), "tide_reports": reports})
+                        return
+                    match = SERIES_REPORTS_RE.match(parsed.path)
+                    if match:
+                        self._send(200, {"items": hydro.repository.list_reports(int(match.group(1)))})
+                        return
+                    match = SERIES_PLANS_RE.match(parsed.path)
+                    if match:
+                        self._send(200, {"items": hydro.list_plans(self._actor(), series_id=int(match.group(1)))})
+                        return
+                    match = PLAN_SUB_RE.match(parsed.path)
+                    if match:
+                        plan_id, sub = int(match.group(1)), match.group(2)
+                        getter = {
+                            "decisions": hydro.decisions,
+                            "reservations": hydro.reservations,
+                            "drafts": hydro.drafts,
+                            "events": hydro.events,
+                        }[sub]
+                        self._send(200, {"items": getter(self._actor(), plan_id)})
+                        return
+                    match = PLAN_RE.match(parsed.path)
+                    if match:
+                        self._send(200, hydro.get_plan(self._actor(), int(match.group(1))))
+                        return
+                    match = JOB_RE.match(parsed.path)
+                    if match:
+                        self._send(200, hydro.job_detail(self._actor(), int(match.group(1))))
+                        return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
             except Exception as exc:
                 self._handle_error(exc)
@@ -107,6 +158,37 @@ def make_handler(service: Any, static_dir: Path):
                     record = service.act(self._actor(), int(match.group(1)), version, match.group(2), body.get("data", {}))
                     self._send(200, record)
                     return
+                if hydro is not None:
+                    if parsed.path == "/api/series":
+                        self._send(201, hydro.create_series(self._actor(), body.get("data", {})))
+                        return
+                    match = SERIES_REPORTS_RE.match(parsed.path)
+                    if match:
+                        result = hydro.ingest_tide_report(self._actor(), int(match.group(1)), body.get("data", {}))
+                        self._send(200, result)
+                        return
+                    match = SERIES_PLANS_RE.match(parsed.path)
+                    if match:
+                        plan = hydro.create_plan(self._actor(), int(match.group(1)), body.get("data", {}))
+                        self._send(201, plan)
+                        return
+                    if parsed.path == "/api/plans/release":
+                        plan_id = body.get("plan_id")
+                        version = body.get("expected_version")
+                        if not isinstance(plan_id, int) or not isinstance(version, int):
+                            raise ValidationError("plan_id和expected_version必须是整数")
+                        self._send(200, hydro.release(self._actor(), plan_id, version, body.get("data", {})))
+                        return
+                    match = re.compile(r"^/api/plans/(\d+)/(berth|depart|cancel)$").match(parsed.path)
+                    if match:
+                        plan_id, action = int(match.group(1)), match.group(2)
+                        handler = {"berth": hydro.mark_berth, "depart": hydro.depart, "cancel": hydro.cancel_plan}[action]
+                        self._send(200, handler(self._actor(), plan_id))
+                        return
+                    match = re.compile(r"^/api/jobs/(\d+)/run$").match(parsed.path)
+                    if match:
+                        self._send(200, hydro.run_job(int(match.group(1))))
+                        return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
             except Exception as exc:
                 self._handle_error(exc)
@@ -114,5 +196,5 @@ def make_handler(service: Any, static_dir: Path):
     return Handler
 
 
-def create_server(host: str, port: int, service: Any, static_dir: Path) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), make_handler(service, static_dir))
+def create_server(host: str, port: int, service: Any, static_dir: Path, hydro: Any = None) -> ThreadingHTTPServer:
+    return ThreadingHTTPServer((host, port), make_handler(service, static_dir, hydro))
